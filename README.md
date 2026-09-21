@@ -45,10 +45,3 @@ First real run downloads all-MiniLM-L6-v2 (~90 MB). Tests use `HashEmbedder` (no
 Rows with `payload.timestamp_imputed = true` had no parseable timestamp, so discount them in recency.
 
 **Module 4 (Sammed)**: `app.include_router(create_router(pipeline))` mounts the endpoints.
-
-## Decisions worth confirming with the team
-1. Chunk carries extra fields beyond the plan (`page`, `section`, `chunk_index`, `word_count`).
-2. Quiz/interaction events are not chunks, so they don't carry `source_type` quiz/event; they live in `raw_events`.
-3. Stage 4 state may share the same SQLite file (M1 owns `documents`, `chunks`, `raw_events`).
-4. Concurrency: one process, a lock around writes. Fine for the MVP demo.
-5. Not supported yet: scanned PDFs (OCR), calendar connector, images in slides.
