@@ -63,6 +63,11 @@ def create_router(pipeline: IngestionPipeline, settings: Settings | None = None)
     # Dev/debug aid so M1 retrieval quality can be eyeballed. Module 2 owns the real hybrid retrieval.
     @router.get("/memory/search", response_model=list[SearchHit])
     def search(user_id: str, q: str, k: int = 5):
-        return memory.search(q, user_id, k=k)
+        return memory.search(
+            q,
+            user_id,
+            k=k,
+            min_score=settings.retrieval_min_score
+        )
 
     return router

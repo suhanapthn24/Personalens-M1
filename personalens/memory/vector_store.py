@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -47,6 +48,9 @@ class VectorMemory:
     # ------------------------------------------------------------ index plumbing
     def _index_path(self, user_id: str) -> Path:
         return self.index_dir / f"{quote(user_id, safe='')}.faiss"
+    
+    def _metadata_path(self, user_id: str) -> Path:
+        return self.index_dir / f"{quote(user_id, safe='')}.meta.json"
 
     def _new_index(self) -> faiss.Index:
         return faiss.IndexIDMap2(faiss.IndexFlatIP(self.embedder.dim))
@@ -56,9 +60,61 @@ class VectorMemory:
         tmp = path.with_suffix(".faiss.tmp")
         faiss.write_index(self._indexes[user_id], str(tmp))
         os.replace(tmp, path)  # atomic: never leaves a half-written index
+        
+    def _save_metadata(self, user_id: str) -> None:
+        metadata = {
+            "embedding_model": self.embedder.model_name,
+            "embedding_dimension": self.embedder.dim,
+            "metric": "cosine",
+            "normalized": True,
+        }
 
+        path = self._metadata_path(user_id)
+        tmp = path.with_suffix(".meta.json.tmp")
+
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+
+        os.replace(tmp, path)
+
+    def _metadata_matches(self, user_id: str) -> bool:
+        path = self._metadata_path(user_id)
+
+        if not path.exists():
+            return False
+
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        return (
+            metadata.get("embedding_model") == self.embedder.model_name
+            and metadata.get("embedding_dimension") == self.embedder.dim
+            and metadata.get("metric") == "cosine"
+            and metadata.get("normalized") is True
+        )
+        
     def _count_chunks(self, user_id: str) -> int:
         return self.db.conn.execute("SELECT COUNT(*) FROM chunks WHERE user_id = ?", (user_id,)).fetchone()[0]
+    
+    def _chunk_ids(self, user_id: str) -> set[int]:
+        rows = self.db.conn.execute(
+            "SELECT chunk_id FROM chunks WHERE user_id = ? ORDER BY chunk_id",
+            (user_id,),
+        ).fetchall()
+        return {int(r["chunk_id"]) for r in rows}
+    
+    def _index_ids(self, idx: faiss.Index) -> set[int]:
+        """Return all vector IDs stored in an IndexIDMap2."""
+        if not isinstance(idx, faiss.IndexIDMap2):
+            return set()
+
+        return {
+            int(idx.id_map.at(i))
+            for i in range(idx.id_map.size())
+        }
 
     def _embed(self, texts: Sequence[str]) -> np.ndarray:
         vecs = np.ascontiguousarray(self.embedder.encode(texts), dtype="float32")
@@ -75,9 +131,27 @@ class VectorMemory:
             n_db = self._count_chunks(user_id)
             if path.exists():
                 idx = faiss.read_index(str(path))
-                if idx.d == self.embedder.dim and idx.ntotal == n_db:
+
+                metadata_ok = self._metadata_matches(user_id)
+
+                db_ids = self._chunk_ids(user_id)
+                index_ids = self._index_ids(idx)
+
+                ids_match = db_ids == index_ids
+
+                if (
+                    idx.d == self.embedder.dim
+                    and idx.ntotal == n_db
+                    and ids_match
+                    and metadata_ok
+                ):
                     self._indexes[user_id] = idx
                     return idx
+
+                log.warning(
+                    "FAISS index for %r is out of sync with SQLite or embedding metadata; rebuilding",
+                    user_id,
+                )
                 log.warning("FAISS index for %r out of sync with SQLite (%s vs %s); rebuilding", user_id, idx.ntotal, n_db)
             elif n_db:
                 log.warning("FAISS index for %r missing but %s chunks exist; rebuilding", user_id, n_db)
@@ -99,6 +173,7 @@ class VectorMemory:
                 idx.add_with_ids(vecs, np.asarray([c.chunk_id for c in chunks], dtype="int64"))
             self._indexes[user_id] = idx
             self._save_index(user_id)
+            self._save_metadata(user_id)
             return idx
 
     # ------------------------------------------------------------ write path
@@ -137,6 +212,7 @@ class VectorMemory:
                     idx.remove_ids(np.asarray(ids, dtype="int64"))
                 raise
             self._save_index(doc.user_id)
+            self._save_metadata(doc.user_id)
         return [c.model_copy(update={"chunk_id": i}) for c, i in zip(chunks, ids)]
 
     def delete_document(self, user_id: str, doc_id: str) -> bool:
@@ -155,6 +231,7 @@ class VectorMemory:
             if rows:
                 idx.remove_ids(np.asarray([r["chunk_id"] for r in rows], dtype="int64"))
             self._save_index(user_id)
+            self._save_metadata(user_id)
             return True
 
     # ------------------------------------------------------------ read path

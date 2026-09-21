@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS documents (
     filename    TEXT NOT NULL,
     source_type TEXT NOT NULL,
     uploaded_at TEXT NOT NULL,
-    n_chunks    INTEGER NOT NULL DEFAULT 0
+    n_chunks    INTEGER NOT NULL DEFAULT 0,
+    file_hash   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 

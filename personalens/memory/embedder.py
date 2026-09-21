@@ -10,6 +10,7 @@ import numpy as np
 
 class Embedder(Protocol):
     dim: int
+    model_name: str
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         """Return float32 array (n, dim), L2-normalised (so inner product == cosine)."""
@@ -61,6 +62,7 @@ class HashEmbedder:
 
     def __init__(self, dim: int = 384):
         self.dim = dim
+        self.model_name = "hash-embedder"
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         out = np.zeros((len(texts), self.dim), dtype="float32")
